@@ -39,6 +39,7 @@ pub enum AppEvent {
     Quit,
     ChangeName,
     ChangeVid,
+    ChangeTime,
 }
 
 /// Terminal event handler.
