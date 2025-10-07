@@ -1,10 +1,18 @@
 use crate::event::{AppEvent, Event, EventHandler};
 use gst::prelude::*;
-use gstreamer::{self as gst, SeekFlags};
+use gstreamer::ffi::gst_uri_set_path_string;
+use gstreamer::glib::property::PropertyGet;
+use gstreamer::query::Uri;
+use gstreamer::{self as gst, ClockTime, SeekFlags};
+use gstreamer_pbutils::Discoverer;
+use ratatui::text::Text;
 use ratatui::{
     DefaultTerminal,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    text::ToText,
 };
+use rfd::FileHandle;
+use std::time::Duration;
 use std::{panic, path::PathBuf, thread};
 use std::{
     path::{self, Path},
@@ -15,7 +23,7 @@ use url::Url;
 #[derive(Debug)]
 pub struct App {
     pub running: bool,
-    pub counter: u8,
+    pub counter: u64,
     pub events: EventHandler,
     pub name: String,
     pub pause: bool,
@@ -23,6 +31,7 @@ pub struct App {
     pub video_path: String,
     pub change_vid: String,
     pub player_var_tx: Option<mpsc::Sender<PlayerVars>>,
+    pub video_duration: String,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +62,7 @@ impl Default for App {
             player_var_tx: None,
             video_path: "/home/koushikk/Downloads/foden.mkv".to_string(),
             change_vid: "/home/koushikk/Downloads/SHOWS/OWAIMONO/[Commie] Owarimonogatari [BD 720p AAC]/[Commie] Owarimonogatari - 03 [BD 720p AAC] [371E3589].mkv".to_string(),
+            video_duration: String::new(),
 
 
 
@@ -79,7 +89,7 @@ impl App {
                     AppEvent::Increment => self.increment_counter(),
                     AppEvent::Decrement => self.decrement_counter(),
                     AppEvent::ChangeName => self.change_name(),
-                    AppEvent::ChangeVid => self.change(),
+                    AppEvent::ChangeVid => self.change().await,
                     AppEvent::Quit => self.quit(),
                     AppEvent::ChangeTime => self.seeker(),
                 },
@@ -105,7 +115,11 @@ impl App {
         Ok(())
     }
 
-    pub fn tick(&self) {}
+    pub fn tick(&mut self) {
+        // this is where i would call the clock enum;
+        // println!("hey dude");
+        //self.counter += 1;
+    }
 
     pub fn change_name(&mut self) {
         self.name = "lebron".to_string();
@@ -121,7 +135,7 @@ impl App {
         }
     }
 
-    pub fn tutorial_main(&mut self, path_string: String, second_path: String) {
+    pub fn tutorial_main(&mut self, path_string: String) {
         let (tx, rx) = mpsc::channel::<PlayerCommand>();
         self.player_tx = Some(tx.clone());
 
@@ -131,15 +145,6 @@ impl App {
         thread::spawn(move || {
             gst::init().unwrap();
 
-            //let uri = "https://gstreamer.freedesktop.org/data/media/sintel_trailer-480p.webm".to_string();
-            // let path = Path::new("/home/koushikk/Downloads/foden.mkv");
-            // self.video_path = path.clone().to_string_lossy().to_string();
-            // let path: &Path = match Path::new("/home/koushikk/Downloads/foden.mkv") {
-            //     path => path,
-            // };
-            // let path = Path::new(path_str);
-            // let path = PathBuf::from(path_string);
-            //
             let path = Path::new(path_string.as_str());
 
             let url = match Url::from_file_path(path) {
@@ -150,21 +155,10 @@ impl App {
                 }
             };
 
-            let path2 = Path::new(second_path.as_str());
-
-            let url2 = match Url::from_file_path(path2) {
-                Ok(url2) => url2,
-                Err(e) => {
-                    println!("error creaing url {:?}", e);
-                    return;
-                }
-            };
-
             let playbin = gst::ElementFactory::make("playbin").build().unwrap();
             playbin.set_property("uri", url.to_string());
             playbin.set_state(gst::State::Playing).unwrap();
 
-            // let pipeline = gst::parse::launch(&format!("playbin uri={url}")).unwrap();
             loop {
                 match rx.recv() {
                     Ok(PlayerCommand::Play) => {
@@ -172,37 +166,19 @@ impl App {
                             .set_state(gst::State::Playing)
                             .expect("Unable to play");
                     }
-                    Ok(PlayerCommand::Change) => {
-                        match recvvar.recv() {
-                            Ok(PlayerVars::SeekTime(_)) => {}
-                            Ok(PlayerVars::VideoFile(url5)) => {
-                                println!("file : {:?}", url5);
-                                playbin.set_state(gst::State::Null).unwrap();
-                                playbin.set_property("uri", url5.to_string());
-                                playbin.set_state(gst::State::Playing).unwrap();
-                            }
-                            Err(e) => {
-                                println!("error {:?}", e);
-                            }
+                    Ok(PlayerCommand::Change) => match recvvar.recv() {
+                        Ok(PlayerVars::SeekTime(_)) => {}
+                        Ok(PlayerVars::VideoFile(url5)) => {
+                            println!("file : {:?}", url5);
+                            playbin.set_state(gst::State::Null).unwrap();
+                            playbin.set_property("uri", url5.to_string());
+
+                            playbin.set_state(gst::State::Playing).unwrap();
                         }
-
-                        // let path3 = Path::new(file.as_str());
-                        //
-                        // let mut url3 = Url::from_file_path(Path::new(".")).expect("bro wtf");
-                        //
-                        // url3 = match Url::from_file_path(path3) {
-                        //     Ok(url3) => url3,
-                        //     Err(e) => {
-                        //         println!("error creaing url {:?}", e);
-                        //         println!("{}", url3);
-                        //         return;
-                        //     }
-                        // };
-
-                        // playbin.set_state(gst::State::Null).unwrap();
-                        // playbin.set_property("uri", url5.to_string());
-                        // playbin.set_state(gst::State::Playing).unwrap();
-                    }
+                        Err(e) => {
+                            println!("error {:?}", e);
+                        }
+                    },
                     Ok(PlayerCommand::Pause) => {
                         playbin
                             .set_state(gst::State::Paused)
@@ -226,11 +202,27 @@ impl App {
                         playbin
                             .seek_simple(SeekFlags::FLUSH | SeekFlags::KEY_UNIT, pos)
                             .unwrap();
+
+                        let duration: ClockTime = playbin.query_duration().unwrap();
+                        let durar = duration;
+                        // ok tommorw i will set up a channel (or find a better way)
+                        // so then from this i can interact with the main thread, also maybe i
+                        // should make it its own enum call , that would make sense AND then i
+                        // could call that enum on every frame? i could make it differnt elements,
+                        // so clock would refressh every secound, but then stuff like the title
+                        // would not need to
+                        //
+                        // i could make it nah bro i just need to set up a channel
+                        // yeah ok i should set up a enum which would handle all the updates, or
+                        // multiple enums idk wait ok so if it receives a "get pos" enum
+                        // it would then send back a enum of get time to the main thread
                     }
                 }
             }
         });
     }
+    // should i make the file browser built in?, well i honeslty dont think i should, maybe if you
+    // load a folder it does but i think il just have it load with rfd
 
     pub fn quit(&mut self) {
         self.running = false;
@@ -247,13 +239,16 @@ impl App {
         self.decrement_counter();
     }
 
-    pub fn change(&mut self) {
-        // let path_new = "/home/koushikk/Downloads/ssstwitter.com_1752545017404.mp4".to_string();
-        let path_new = self.change_vid.clone();
+    pub async fn change(&mut self) {
+        let video_from_rfd = self.open_file().await.unwrap();
+        let path_new = video_from_rfd.path().to_string_lossy().to_string();
+        let discover = Discoverer::new(ClockTime::from_seconds(5)).expect("failed");
+        let url = Url::from_file_path(path_new.clone()).unwrap();
+        let info = discover.discover_uri(url.as_str()).unwrap();
+        let duration = info.duration().unwrap().to_text().to_string();
 
-        // need to find a better way to send struct, because i dont want to send a whole struct i
-        // just want to send a value but the way it is right now im receiving the whole struct
-        // ok thats just fuckign enums
+        self.video_duration = duration;
+
         match &self.player_tx {
             Some(tx) => {
                 match &self.player_var_tx {
@@ -286,7 +281,7 @@ impl App {
             Some(tx) => {
                 match &self.player_var_tx {
                     Some(tx2) => {
-                        let _ = tx2.send(PlayerVars::SeekTime(self.counter.into()));
+                        let _ = tx2.send(PlayerVars::SeekTime(self.counter));
                     }
                     None => {
                         println!("fukced up the player var thing");
@@ -315,9 +310,24 @@ impl App {
 
     pub fn decrement_counter(&mut self) {
         if self.player_tx.is_none() {
-            self.tutorial_main(self.video_path.clone(), self.change_vid.clone());
+            self.tutorial_main(self.video_path.clone());
         }
 
         self.counter = self.counter.saturating_sub(1);
+    }
+
+    pub async fn open_file(&mut self) -> Option<FileHandle> {
+        if let Some(handle) = rfd::AsyncFileDialog::new()
+            .set_title("Select a file")
+            .add_filter("video files", &["mp4", "avi", "mkv", "mov"])
+            .pick_file()
+            .await
+        {
+            println!("Selected file {:?}", handle.path());
+            Some(handle)
+        } else {
+            println!("no file selected");
+            None
+        }
     }
 }

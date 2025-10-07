@@ -26,8 +26,9 @@ impl Widget for &App {
                 Press left and right to increment and decrement the counter respectively.\n\
                 Counter: {}
                 Your Name is {}
-                Paused :{}",
-            self.counter, self.name, self.pause
+                Paused :{}
+                Duration : {}",
+            self.counter, self.name, self.pause, self.video_duration
         );
 
         let paragraph = Paragraph::new(text)
