@@ -40,6 +40,7 @@ pub enum AppEvent {
     ChangeName,
     ChangeVid,
     ChangeTime,
+    Receive,
 }
 
 /// Terminal event handler.

@@ -27,8 +27,9 @@ impl Widget for &App {
                 Counter: {}
                 Your Name is {}
                 Paused :{}
-                Duration : {}",
-            self.counter, self.name, self.pause, self.video_duration
+                Duration : {}
+                Current time: {:?}",
+            self.counter, self.name, self.pause, self.video_duration, self.video_time
         );
 
         let paragraph = Paragraph::new(text)

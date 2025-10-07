@@ -1,23 +1,20 @@
 use crate::event::{AppEvent, Event, EventHandler};
+
 use gst::prelude::*;
-use gstreamer::ffi::gst_uri_set_path_string;
-use gstreamer::glib::property::PropertyGet;
-use gstreamer::query::Uri;
+
 use gstreamer::{self as gst, ClockTime, SeekFlags};
 use gstreamer_pbutils::Discoverer;
-use ratatui::text::Text;
+
 use ratatui::{
     DefaultTerminal,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     text::ToText,
 };
 use rfd::FileHandle;
-use std::time::Duration;
-use std::{panic, path::PathBuf, thread};
-use std::{
-    path::{self, Path},
-    sync::{Arc, Mutex, mpsc},
-};
+
+use std::time::{Duration, Instant};
+use std::{panic, thread};
+use std::{path::Path, sync::mpsc};
 use url::Url;
 
 #[derive(Debug)]
@@ -32,6 +29,10 @@ pub struct App {
     pub change_vid: String,
     pub player_var_tx: Option<mpsc::Sender<PlayerVars>>,
     pub video_duration: String,
+    pub player_info_tx: Option<mpsc::Receiver<PlayerSend>>,
+    pub video_time: String,
+    pub video_opened: bool,
+    pub last_receive: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +42,7 @@ pub enum PlayerCommand {
     Stop,
     Change,
     Seek,
+    Get,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +50,11 @@ pub enum PlayerVars {
     SeekTime(u64),
     VideoFile(Url),
     // video_file: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum PlayerSend {
+    CurrentTime(ClockTime),
 }
 
 impl Default for App {
@@ -63,6 +70,10 @@ impl Default for App {
             video_path: "/home/koushikk/Downloads/foden.mkv".to_string(),
             change_vid: "/home/koushikk/Downloads/SHOWS/OWAIMONO/[Commie] Owarimonogatari [BD 720p AAC]/[Commie] Owarimonogatari - 03 [BD 720p AAC] [371E3589].mkv".to_string(),
             video_duration: String::new(),
+            player_info_tx: None,
+            video_time: String::new(),
+            video_opened: false,
+            last_receive: Instant::now(),
 
 
 
@@ -92,6 +103,7 @@ impl App {
                     AppEvent::ChangeVid => self.change().await,
                     AppEvent::Quit => self.quit(),
                     AppEvent::ChangeTime => self.seeker(),
+                    AppEvent::Receive => self.receive(),
                 },
             }
         }
@@ -109,6 +121,7 @@ impl App {
             KeyCode::Up => self.events.send(AppEvent::ChangeName),
             KeyCode::Char('k') => self.events.send(AppEvent::ChangeVid),
             KeyCode::Char('t') => self.events.send(AppEvent::ChangeTime),
+            KeyCode::Char('r') => self.events.send(AppEvent::Receive),
 
             _ => {}
         }
@@ -116,9 +129,18 @@ impl App {
     }
 
     pub fn tick(&mut self) {
-        // this is where i would call the clock enum;
-        // println!("hey dude");
-        //self.counter += 1;
+        if self.video_opened && self.last_receive.elapsed() > Duration::from_millis(100) {
+            if let Some(tx) = &self.player_tx {
+                let _ = tx.send(PlayerCommand::Get);
+            }
+
+            if let Some(rx) = &self.player_info_tx {
+                if let Ok(PlayerSend::CurrentTime(time)) = rx.try_recv() {
+                    self.video_time = time.to_string();
+                    self.last_receive = Instant::now();
+                }
+            }
+        }
     }
 
     pub fn change_name(&mut self) {
@@ -141,6 +163,9 @@ impl App {
 
         let (sendvar, recvvar) = mpsc::channel::<PlayerVars>();
         self.player_var_tx = Some(sendvar.clone());
+
+        let (playerinfosend, player_send_rx) = mpsc::channel::<PlayerSend>();
+        self.player_info_tx = Some(player_send_rx);
 
         thread::spawn(move || {
             gst::init().unwrap();
@@ -188,6 +213,13 @@ impl App {
                         playbin.set_state(gst::State::Null).expect("Unable to stop");
                         break;
                     }
+                    Ok(PlayerCommand::Get) => {
+                        if let Some(position) = playbin.query_position::<gst::ClockTime>() {
+                            let _ = playerinfosend.send(PlayerSend::CurrentTime(position));
+                        } else {
+                            //println!("fuark")
+                        }
+                    }
                     Ok(PlayerCommand::Seek) => {
                         let mut pos = gst::ClockTime::from_seconds(30);
                         match recvvar.recv() {
@@ -202,28 +234,11 @@ impl App {
                         playbin
                             .seek_simple(SeekFlags::FLUSH | SeekFlags::KEY_UNIT, pos)
                             .unwrap();
-
-                        let duration: ClockTime = playbin.query_duration().unwrap();
-                        let durar = duration;
-                        // ok tommorw i will set up a channel (or find a better way)
-                        // so then from this i can interact with the main thread, also maybe i
-                        // should make it its own enum call , that would make sense AND then i
-                        // could call that enum on every frame? i could make it differnt elements,
-                        // so clock would refressh every secound, but then stuff like the title
-                        // would not need to
-                        //
-                        // i could make it nah bro i just need to set up a channel
-                        // yeah ok i should set up a enum which would handle all the updates, or
-                        // multiple enums idk wait ok so if it receives a "get pos" enum
-                        // it would then send back a enum of get time to the main thread
                     }
                 }
             }
         });
     }
-    // should i make the file browser built in?, well i honeslty dont think i should, maybe if you
-    // load a folder it does but i think il just have it load with rfd
-
     pub fn quit(&mut self) {
         self.running = false;
 
@@ -237,6 +252,13 @@ impl App {
         }
 
         self.decrement_counter();
+    }
+
+    pub fn receive(&mut self) {
+        // send the get
+        if let Some(tx) = &self.player_tx {
+            let _ = tx.send(PlayerCommand::Get);
+        }
     }
 
     pub async fn change(&mut self) {
@@ -312,6 +334,7 @@ impl App {
         if self.player_tx.is_none() {
             self.tutorial_main(self.video_path.clone());
         }
+        self.video_opened = true;
 
         self.counter = self.counter.saturating_sub(1);
     }
